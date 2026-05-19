@@ -709,6 +709,48 @@
 
         <div style="height:1px;background:var(--border);margin:24px -24px;"></div>
 
+        <div class="control-group">
+          <div class="control-label" style="margin-bottom:6px">
+            <span class="name">Transfer Pricing (Outcome-based only)</span>
+          </div>
+          <div class="toggle-group" id="transferToggle">
+            <button class="active" data-transfer="off">Off</button>
+            <button data-transfer="on">On</button>
+          </div>
+          <p class="small" style="margin:8px 0 0">When enabled, transfers are billed in addition to contained calls. Abandoned calls are not billed.</p>
+        </div>
+
+        <div id="transferControls" style="display:none">
+          <div class="control-group">
+            <div class="control-label">
+              <span class="name">Transfer Price <span class="small" style="font-weight:400">(per transferred call)</span></span>
+              <span class="val" id="transferPriceLabel">$0.30</span>
+            </div>
+            <input type="range" id="transferPrice" min="0.10" max="0.50" step="0.01" value="0.30" />
+            <div class="small" style="display:flex;justify-content:space-between;margin-top:4px"><span>$0.10</span><span>$0.50 (list)</span></div>
+          </div>
+          <div class="control-group">
+            <div class="control-label">
+              <span class="name">Abandon Rate</span>
+              <span class="val" id="abandonRateLabel">3.0%</span>
+            </div>
+            <input type="range" id="abandonRate" min="0" max="10" step="0.5" value="3" />
+            <div class="small" style="display:flex;justify-content:space-between;margin-top:4px"><span>0%</span><span>10%</span></div>
+          </div>
+          <div class="summary-row" style="grid-template-columns:1fr 1fr;margin-bottom:0">
+            <div class="summary-card">
+              <div class="label">Transferred</div>
+              <div class="value" id="transferredVolLabel" style="font-size:14px">—</div>
+            </div>
+            <div class="summary-card">
+              <div class="label">Abandoned</div>
+              <div class="value" id="abandonedVolLabel" style="font-size:14px">—</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="height:1px;background:var(--border);margin:24px -24px;"></div>
+
         <h3 style="margin-bottom:6px">List Price Controls</h3>
         <p class="small" style="margin:0 0 16px">Adjust to model alternate pricing scenarios for leadership discussion.</p>
 
@@ -945,13 +987,34 @@ function calcTieredCost(volume, tiers) {
   return cost;
 }
 
+// Outcome-based (resolved) cost incl optional transfer revenue
+// containmentRate, abandonRate are fractions (0-1). transferEnabled=bool. transferPrice in $/transfer.
+function calcOutcomeCost(totalVolume, containmentRate, resolvedTiers, opts) {
+  const containedVol = totalVolume * containmentRate;
+  const containedCost = calcTieredCost(containedVol, resolvedTiers);
+  if (!opts || !opts.transferEnabled) return { total: containedCost, contained: containedCost, transfer: 0, transferredVol: 0, abandonedVol: 0 };
+
+  const abandonedVol = totalVolume * (opts.abandonRate || 0);
+  const transferredVol = Math.max(0, totalVolume - containedVol - abandonedVol);
+  const transferCost = transferredVol * (opts.transferPrice || 0);
+  return {
+    total: containedCost + transferCost,
+    contained: containedCost,
+    transfer: transferCost,
+    transferredVol,
+    abandonedVol,
+  };
+}
+
 // Binary search for break-even containment given total volume
-function findBreakEven(totalVolume, resolvedTiers, perConvTiers) {
+// Monotonicity assumed: resolved cost (incl transfer) is non-decreasing in containment
+// when marginal resolved tier price > transfer price (typical case).
+function findBreakEven(totalVolume, resolvedTiers, perConvTiers, opts) {
   const perConvCost = calcTieredCost(totalVolume, perConvTiers);
   let lo = 0, hi = 1;
   for (let i = 0; i < 60; i++) {
     const mid = (lo + hi) / 2;
-    const resolvedCost = calcTieredCost(totalVolume * mid, resolvedTiers);
+    const resolvedCost = calcOutcomeCost(totalVolume, mid, resolvedTiers, opts).total;
     if (resolvedCost < perConvCost) lo = mid;
     else hi = mid;
   }
@@ -996,7 +1059,18 @@ const state = {
   freq: "annual",
   resolvedPrice: 1.00,
   perConvPrice: 0.60,
+  transferEnabled: false,
+  transferPrice: 0.30,
+  abandonRate: 3, // percentage
 };
+
+function transferOpts() {
+  return {
+    transferEnabled: state.transferEnabled,
+    transferPrice: state.transferPrice,
+    abandonRate: state.abandonRate / 100,
+  };
+}
 
 // ============================================================
 // CHART THEME
@@ -1068,20 +1142,36 @@ function render() {
   // Tiers & costs
   const { resolved, perConv } = currentTiers();
   const mult = multiplier();
+  const opts = transferOpts();
   const containedVol = state.volume * (state.containment / 100);
 
-  const resolvedCost = calcTieredCost(containedVol, resolved) * mult;
+  const outcome = calcOutcomeCost(state.volume, state.containment / 100, resolved, opts);
+  const resolvedCost = outcome.total * mult;
   const perConvCost = calcTieredCost(state.volume, perConv) * mult;
-  const breakEven = findBreakEven(state.volume, resolved, perConv);
+  const breakEven = findBreakEven(state.volume, resolved, perConv, opts);
 
   // Effective per-unit
-  const effResolved = containedVol > 0 ? resolvedCost / containedVol : 0;
+  const effResolved = state.volume > 0 ? resolvedCost / state.volume : 0;
   const effPerConv = state.volume > 0 ? perConvCost / state.volume : 0;
 
   document.getElementById("resolvedCost").textContent = fmtMoney(resolvedCost);
   document.getElementById("perConvCost").textContent = fmtMoney(perConvCost);
-  document.getElementById("resolvedUnit").textContent = "Effective: " + fmtMoneyDec(effResolved) + " / contained conv";
+  if (state.transferEnabled) {
+    document.getElementById("resolvedUnit").innerHTML =
+      "Contained: " + fmtMoney(outcome.contained * mult) +
+      " · Transfer: " + fmtMoney(outcome.transfer * mult) +
+      "<br>Effective: " + fmtMoneyDec(effResolved) + " / total conv";
+  } else {
+    const effContained = containedVol > 0 ? resolvedCost / containedVol : 0;
+    document.getElementById("resolvedUnit").textContent = "Effective: " + fmtMoneyDec(effContained) + " / contained conv";
+  }
   document.getElementById("perConvUnit").textContent = "Effective: " + fmtMoneyDec(effPerConv) + " / conv";
+
+  // Transfer panel volume readouts
+  if (state.transferEnabled) {
+    document.getElementById("transferredVolLabel").textContent = fmtFullNum(outcome.transferredVol);
+    document.getElementById("abandonedVolLabel").textContent = fmtFullNum(outcome.abandonedVol);
+  }
 
   const savings = Math.abs(resolvedCost - perConvCost);
   const cheaper = perConvCost < resolvedCost ? "perconv" : "resolved";
@@ -1096,12 +1186,13 @@ function render() {
 
   const recEl = document.getElementById("recommendation");
   const recText = document.getElementById("recommendationText");
+  const xferNote = state.transferEnabled ? ` (transfers @ ${fmtMoneyDec(state.transferPrice)}, abandon ${state.abandonRate}%)` : "";
   if (cheaper === "perconv") {
     recEl.classList.add("teal");
-    recText.textContent = `Recommend Per-Conversation pricing. Containment (${state.containment}%) exceeds break-even (${(breakEven*100).toFixed(1)}%) — customer saves ${fmtMoney(savings)} annually.`;
+    recText.textContent = `Recommend Per-Conversation pricing${xferNote}. Containment (${state.containment}%) exceeds break-even (${(breakEven*100).toFixed(1)}%) — customer saves ${fmtMoney(savings)} annually.`;
   } else {
     recEl.classList.remove("teal");
-    recText.textContent = `Recommend Resolved pricing. Containment (${state.containment}%) is below break-even (${(breakEven*100).toFixed(1)}%) — saves ${fmtMoney(savings)} annually vs per-conv.`;
+    recText.textContent = `Recommend Resolved pricing${xferNote}. Containment (${state.containment}%) is below break-even (${(breakEven*100).toFixed(1)}%) — saves ${fmtMoney(savings)} annually vs per-conv.`;
   }
 
   renderBarChart();
@@ -1112,10 +1203,11 @@ function renderBarChart() {
   const theme = chartTheme();
   const { resolved, perConv } = currentTiers();
   const mult = multiplier();
-  const breakEven = findBreakEven(state.volume, resolved, perConv);
+  const opts = transferOpts();
+  const breakEven = findBreakEven(state.volume, resolved, perConv, opts);
 
   const containmentLevels = [0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 1.00];
-  const resolvedCosts = containmentLevels.map(c => calcTieredCost(state.volume * c, resolved) * mult);
+  const resolvedCosts = containmentLevels.map(c => calcOutcomeCost(state.volume, c, resolved, opts).total * mult);
   const perConvCost = calcTieredCost(state.volume, perConv) * mult;
   const perConvCosts = containmentLevels.map(() => perConvCost);
 
@@ -1180,13 +1272,14 @@ function renderBarChart() {
 
 function renderBreakEvenCharts() {
   const theme = chartTheme();
+  const opts = transferOpts();
 
   function buildBreakEvenData(builder, basePrice, ratioPrice, maxVol, step) {
     const points = [];
     for (let v = step; v <= maxVol; v += step) {
       const resolvedTiers = builder(basePrice);
       const perConvTiers = builder(ratioPrice);
-      const be = findBreakEven(v, resolvedTiers, perConvTiers);
+      const be = findBreakEven(v, resolvedTiers, perConvTiers, opts);
       points.push({ x: v, y: be * 100 });
     }
     return points;
@@ -1248,7 +1341,7 @@ function renderBreakEvenCharts() {
             title: { display: true, text: "Break-even containment %", color: theme.textMuted },
             ticks: { color: theme.textMuted, callback: (v) => v.toFixed(0) + "%" },
             grid: { color: theme.border },
-            suggestedMin: Math.min(refLine - 15, 40),
+            suggestedMin: Math.max(0, Math.min(...data.map(p => p.y)) - 5),
             suggestedMax: refLine + 5,
           }
         }
@@ -1260,6 +1353,13 @@ function renderBreakEvenCharts() {
   if (voiceBreakChart) voiceBreakChart.destroy();
   chatBreakChart = new Chart(document.getElementById("chatBreakChart"), makeConfig(chatData, 60, "Chat", theme.purple));
   voiceBreakChart = new Chart(document.getElementById("voiceBreakChart"), makeConfig(voiceData, 50, "Voice", theme.teal));
+}
+
+// Debounced refresh so dragging the slider doesn't lag
+let _beTimer = null;
+function refreshBreakEvenCharts() {
+  clearTimeout(_beTimer);
+  _beTimer = setTimeout(renderBreakEvenCharts, 80);
 }
 
 function renderTierTable() {
@@ -1308,6 +1408,29 @@ function wire() {
   document.getElementById("containment").addEventListener("input", (e) => { state.containment = parseInt(e.target.value, 10); render(); });
   document.getElementById("resolvedPrice").addEventListener("input", (e) => { state.resolvedPrice = parseFloat(e.target.value); render(); });
   document.getElementById("perConvPrice").addEventListener("input", (e) => { state.perConvPrice = parseFloat(e.target.value); render(); });
+
+  document.getElementById("transferPrice").addEventListener("input", (e) => {
+    state.transferPrice = parseFloat(e.target.value);
+    document.getElementById("transferPriceLabel").textContent = fmtMoneyDec(state.transferPrice);
+    render();
+    if (state.transferEnabled) refreshBreakEvenCharts();
+  });
+  document.getElementById("abandonRate").addEventListener("input", (e) => {
+    state.abandonRate = parseFloat(e.target.value);
+    document.getElementById("abandonRateLabel").textContent = state.abandonRate.toFixed(1) + "%";
+    render();
+    if (state.transferEnabled) refreshBreakEvenCharts();
+  });
+  document.querySelectorAll("#transferToggle button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#transferToggle button").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      state.transferEnabled = btn.dataset.transfer === "on";
+      document.getElementById("transferControls").style.display = state.transferEnabled ? "block" : "none";
+      render();
+      refreshBreakEvenCharts();
+    });
+  });
 
   document.querySelectorAll("#productToggle button").forEach(btn => {
     btn.addEventListener("click", () => {
