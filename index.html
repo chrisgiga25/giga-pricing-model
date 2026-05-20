@@ -642,7 +642,7 @@
     <div class="positioning-note">
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
       <div>
-        <strong>Positioning:</strong> Competitors (Decagon, Sierra) charge $1.00 per resolved chat. We match their list price on resolved <em>and</em> offer a per-conversation alternative that beats them above a 60% containment rate (50% for voice). Customers who execute well win — and Giga wins more revenue at scale.
+        <strong>Positioning:</strong> Competitors (Decagon, Sierra) charge $1.00 per resolved chat. We match their list price on resolved <em>and</em> offer a per-conversation alternative that beats them above a 60% containment rate (50% for voice). Outcome-based deals can optionally include transfer pricing (chat list $0.35 / voice list $0.50) — when enabled, abandoned calls are not billed and break-even shifts further in the customer's favor. Customers who execute well win — and Giga wins more revenue at scale.
       </div>
     </div>
   </section>
@@ -673,8 +673,8 @@
             <span class="name">Annual Conversation Volume</span>
             <span class="val" id="volumeLabel">2,000,000</span>
           </div>
-          <input type="range" id="volume" min="100000" max="20000000" step="50000" value="2000000" />
-          <div class="small" style="display:flex;justify-content:space-between;margin-top:4px"><span>100K</span><span>20M</span></div>
+          <input type="range" id="volume" min="100000" max="100000000" step="100000" value="2000000" />
+          <div class="small" style="display:flex;justify-content:space-between;margin-top:4px"><span>100K</span><span>100M</span></div>
         </div>
 
         <div class="control-group">
@@ -726,8 +726,8 @@
               <span class="name">Transfer Price <span class="small" style="font-weight:400">(per transferred call)</span></span>
               <span class="val" id="transferPriceLabel">$0.30</span>
             </div>
-            <input type="range" id="transferPrice" min="0.10" max="0.50" step="0.01" value="0.30" />
-            <div class="small" style="display:flex;justify-content:space-between;margin-top:4px"><span>$0.10</span><span>$0.50 (list)</span></div>
+            <input type="range" id="transferPrice" min="0.05" max="0.35" step="0.01" value="0.20" />
+            <div class="small" style="display:flex;justify-content:space-between;margin-top:4px"><span id="transferMinLabel">$0.05</span><span id="transferMaxLabel">$0.35 (list)</span></div>
           </div>
           <div class="control-group">
             <div class="control-label">
@@ -941,38 +941,33 @@
 // PRICING ENGINE
 // ============================================================
 
-// Build chat tiers programmatically — first 24 bands of 250K, then 10 bands of 1M
-function buildChatTiers(basePrice) {
-  const tiers = [];
+// Band structure from spreadsheet — same bands for Chat and Voice.
+// 8 × 250K (0-2M) + 16 × 500K (2M-10M) + 10 × 1M (10M-20M)
+// + 8 × 5M (20M-60M) + 4 × 10M (60M-100M) = 46 tiers
+const TIER_BANDS = (() => {
+  const bands = [];
   let start = 0;
-  for (let i = 0; i < 24; i++) {
-    const end = (i + 1) * 250000;
-    tiers.push({ start, end, price: basePrice * Math.pow(0.97, i) });
-    start = end;
-  }
-  for (let i = 0; i < 10; i++) {
-    const tierIndex = 24 + i;
-    const end = 10000000 + (i + 1) * 1000000;
-    tiers.push({ start, end, price: basePrice * Math.pow(0.97, tierIndex) });
-    start = end;
-  }
-  // Extend last tier to infinity so calculations don't underflow
-  tiers[tiers.length - 1].end = Infinity;
-  return tiers;
-}
+  // 8 × 250K bands → up to 2M
+  for (let i = 0; i < 8; i++) { bands.push([start, start + 250000]); start += 250000; }
+  // 16 × 500K bands → up to 10M
+  for (let i = 0; i < 16; i++) { bands.push([start, start + 500000]); start += 500000; }
+  // 10 × 1M bands → up to 20M
+  for (let i = 0; i < 10; i++) { bands.push([start, start + 1000000]); start += 1000000; }
+  // 8 × 5M bands → up to 60M
+  for (let i = 0; i < 8; i++) { bands.push([start, start + 5000000]); start += 5000000; }
+  // 4 × 10M bands → up to 100M
+  for (let i = 0; i < 4; i++) { bands.push([start, start + 10000000]); start += 10000000; }
+  return bands;
+})();
 
-// Build voice tiers — 1M bands
-function buildVoiceTiers(basePrice) {
-  const tiers = [];
-  for (let i = 0; i < 30; i++) {
-    tiers.push({
-      start: i * 1000000,
-      end: (i + 1) * 1000000,
-      price: basePrice * Math.pow(0.97, i)
-    });
-  }
-  tiers[tiers.length - 1].end = Infinity;
-  return tiers;
+// Build tiers from a base price using the unified 46-band structure.
+// Compounding 3% discount per band.
+function buildTiers(basePrice) {
+  return TIER_BANDS.map(([s, e], i) => ({
+    start: s,
+    end: i === TIER_BANDS.length - 1 ? Infinity : e,
+    price: basePrice * Math.pow(0.97, i),
+  }));
 }
 
 // Marginal tiered cost calculation
@@ -1097,30 +1092,42 @@ Chart.defaults.font.size = 12;
 let barChart, chatBreakChart, voiceBreakChart;
 
 function syncProductDefaults(product) {
+  const xferSlider = document.getElementById("transferPrice");
   if (product === "chat") {
     state.resolvedPrice = 1.00;
     state.perConvPrice = 0.60;
+    state.transferPrice = 0.20;
     document.getElementById("resolvedPrice").min = 0.50;
     document.getElementById("resolvedPrice").max = 2.00;
     document.getElementById("perConvPrice").min = 0.25;
     document.getElementById("perConvPrice").max = 1.50;
+    xferSlider.min = 0.05;
+    xferSlider.max = 0.35;
+    xferSlider.step = 0.01;
   } else {
     state.resolvedPrice = 1.50;
     state.perConvPrice = 0.75;
+    state.transferPrice = 0.30;
     document.getElementById("resolvedPrice").min = 0.75;
     document.getElementById("resolvedPrice").max = 3.00;
     document.getElementById("perConvPrice").min = 0.25;
     document.getElementById("perConvPrice").max = 2.00;
+    xferSlider.min = 0.10;
+    xferSlider.max = 0.50;
+    xferSlider.step = 0.01;
   }
   document.getElementById("resolvedPrice").value = state.resolvedPrice;
   document.getElementById("perConvPrice").value = state.perConvPrice;
+  xferSlider.value = state.transferPrice;
+  document.getElementById("transferPriceLabel").textContent = fmtMoneyDec(state.transferPrice);
+  document.getElementById("transferMinLabel").textContent = fmtMoneyDec(parseFloat(xferSlider.min));
+  document.getElementById("transferMaxLabel").textContent = fmtMoneyDec(parseFloat(xferSlider.max)) + " (list)";
 }
 
 function currentTiers() {
-  const builder = state.product === "chat" ? buildChatTiers : buildVoiceTiers;
   return {
-    resolved: builder(state.resolvedPrice),
-    perConv: builder(state.perConvPrice),
+    resolved: buildTiers(state.resolvedPrice),
+    perConv: buildTiers(state.perConvPrice),
   };
 }
 
@@ -1274,21 +1281,26 @@ function renderBreakEvenCharts() {
   const theme = chartTheme();
   const opts = transferOpts();
 
-  function buildBreakEvenData(builder, basePrice, ratioPrice, maxVol, step) {
+  function buildBreakEvenData(basePrice, ratioPrice, maxVol) {
     const points = [];
-    for (let v = step; v <= maxVol; v += step) {
-      const resolvedTiers = builder(basePrice);
-      const perConvTiers = builder(ratioPrice);
+    const resolvedTiers = buildTiers(basePrice);
+    const perConvTiers = buildTiers(ratioPrice);
+    // Adaptive step so the curve is smooth at low volumes and the chart isn't oversampled at the high end
+    let v = 250000;
+    while (v <= maxVol) {
       const be = findBreakEven(v, resolvedTiers, perConvTiers, opts);
       points.push({ x: v, y: be * 100 });
+      if (v < 10000000) v += 250000;
+      else if (v < 20000000) v += 500000;
+      else v += 2500000;
     }
     return points;
   }
 
-  // Chat: 250K to 20M
-  const chatData = buildBreakEvenData(buildChatTiers, 1.00, 0.60, 20000000, 250000);
-  // Voice: 500K to 10M
-  const voiceData = buildBreakEvenData(buildVoiceTiers, 1.50, 0.75, 10000000, 250000);
+  // Chat: 250K to 50M
+  const chatData = buildBreakEvenData(1.00, 0.60, 50000000);
+  // Voice: 250K to 50M
+  const voiceData = buildBreakEvenData(1.50, 0.75, 50000000);
 
   function makeConfig(data, refLine, label, color) {
     return {
@@ -1367,36 +1379,51 @@ function renderTierTable() {
   const currentTierIdx = findCurrentTier(state.volume, resolved);
   const tbody = document.getElementById("tierBody");
   const isChat = state.product === "chat";
-  const baseTierCount = isChat ? 34 : 8;
-  const ratio = state.perConvPrice / state.resolvedPrice;
+  const opts = transferOpts();
 
   document.getElementById("tierTitle").textContent = isChat ? "Chat Tier Schedule" : "Voice Tier Schedule";
-  document.getElementById("tierSub").textContent = isChat
-    ? "34 tiers · 250K bands through 10M, then 1M bands to 20M"
-    : "8 tiers · 1M bands";
+  document.getElementById("tierSub").textContent =
+    `${TIER_BANDS.length} tiers · 250K bands (0-2M), 500K bands (2-10M), 1M bands (10-20M), 5M bands (20-60M), 10M bands (60-100M)`;
 
   tbody.innerHTML = "";
-  for (let i = 0; i < baseTierCount; i++) {
+  for (let i = 0; i < TIER_BANDS.length; i++) {
     const tier = resolved[i];
     const perConvTier = perConv[i];
     const tr = document.createElement("tr");
     if (i === currentTierIdx) tr.className = "current";
     const endLabel = tier.end === Infinity ? "+" : fmtFullNum(tier.end);
-    const discount = i === 0 ? "—" : (100 - (tier.price / state.resolvedPrice * 100)).toFixed(1) + "%";
+    const discount = i === 0 ? "—" : (100 - Math.pow(0.97, i) * 100).toFixed(1) + "%";
+
+    // Per-tier break-even at this tier's upper-bound volume.
+    // Reflects transfer pricing + abandon when transfers are enabled.
+    const repVolume = tier.end === Infinity ? 100000000 : tier.end;
+    const tierBreakEven = findBreakEven(repVolume, resolved, perConv, opts);
+
     tr.innerHTML = `
       <td>${i + 1}</td>
       <td>${fmtFullNum(tier.start + 1)} – ${endLabel}</td>
       <td>${fmtMoneyDec(tier.price, 4)}</td>
       <td>${fmtMoneyDec(perConvTier.price, 4)}</td>
-      <td>${(ratio * 100).toFixed(1)}%</td>
+      <td>${(tierBreakEven * 100).toFixed(1)}%</td>
       <td>${discount}</td>
     `;
     tbody.appendChild(tr);
   }
 
-  const currentTierRow = tbody.querySelector("tr.current");
-  if (currentTierRow) {
-    setTimeout(() => currentTierRow.scrollIntoView({ block: "nearest", behavior: "smooth" }), 0);
+  // Scroll only the inner tier-scroll container — never the page.
+  // This is the fix for the page-jump on input changes.
+  const currentRow = tbody.querySelector("tr.current");
+  if (currentRow) {
+    const container = document.querySelector(".tier-scroll");
+    if (container) {
+      const rowTop = currentRow.offsetTop;
+      const rowBottom = rowTop + currentRow.offsetHeight;
+      const scrollTop = container.scrollTop;
+      const viewBottom = scrollTop + container.clientHeight;
+      if (rowTop < scrollTop || rowBottom > viewBottom) {
+        container.scrollTop = Math.max(0, rowTop - container.clientHeight / 2 + currentRow.offsetHeight / 2);
+      }
+    }
   }
 }
 
