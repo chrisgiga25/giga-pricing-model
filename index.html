@@ -1213,7 +1213,23 @@ function render() {
 
   const ratio = state.perConvPrice / state.resolvedPrice;
   document.getElementById("ratioLabel").textContent = (ratio * 100).toFixed(1) + "%";
-  document.getElementById("baseBreakLabel").textContent = (ratio * 100).toFixed(1) + "%";
+
+  // Base break-even at list prices (no volume discount). With transfer pricing on,
+  // we solve: containment × resolved + (1 − containment − abandon) × transfer = per_conv
+  // ⇒ containment_BE = (per_conv − (1 − abandon) × transfer) / (resolved − transfer)
+  let baseBE = ratio;
+  if (state.transferEnabled) {
+    const tp = state.transferPrice;
+    const ab = state.abandonRate / 100;
+    const denom = state.resolvedPrice - tp;
+    if (denom > 1e-9) {
+      baseBE = (state.perConvPrice - (1 - ab) * tp) / denom;
+    } else {
+      baseBE = 1; // resolved ≤ transfer: per-conv essentially always wins
+    }
+    baseBE = Math.max(0, Math.min(1, baseBE));
+  }
+  document.getElementById("baseBreakLabel").textContent = (baseBE * 100).toFixed(1) + "%";
 
   // Tiers & costs
   const { resolved, perConv } = currentTiers();
