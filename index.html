@@ -564,6 +564,75 @@
   }
   .small { font-size: 12px; color: var(--text-muted); }
 
+  /* Help tooltip — inline ? badge with hover explanation */
+  .help {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--bg-soft);
+    color: var(--text-muted);
+    border: 1px solid var(--border-strong);
+    font-size: 9px;
+    font-weight: 700;
+    cursor: help;
+    margin-left: 5px;
+    position: relative;
+    vertical-align: middle;
+    letter-spacing: 0;
+    text-transform: none;
+    line-height: 1;
+    user-select: none;
+  }
+  .help:hover { background: var(--purple); color: #fff; border-color: var(--purple); }
+  .help::after {
+    content: attr(data-tip);
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--text);
+    color: var(--bg);
+    font-size: 11.5px;
+    font-weight: 500;
+    padding: 10px 12px;
+    border-radius: 6px;
+    width: 260px;
+    text-align: left;
+    letter-spacing: 0;
+    line-height: 1.5;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s 0s;
+    z-index: 1000;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+    text-transform: none;
+  }
+  .help::before {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 2px;
+    border: 6px solid transparent;
+    border-bottom-color: var(--text);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s 0s;
+    z-index: 1000;
+  }
+  .help:hover::after,
+  .help:hover::before {
+    opacity: 1;
+    transition-delay: 0.1s;
+  }
+  /* Tooltip variant that flips to the left when near the right edge */
+  .help.tip-left::after { left: auto; right: 0; transform: none; }
+  .help.tip-left::before { left: auto; right: 4px; transform: none; }
+
   @media (max-width: 1100px) {
     .kpi-grid { grid-template-columns: repeat(2, 1fr); }
     .calc-grid { grid-template-columns: 1fr; }
@@ -776,7 +845,7 @@
             <div class="value" id="ratioLabel">60%</div>
           </div>
           <div class="summary-card">
-            <div class="label">Break-Even (base)</div>
+            <div class="label">Resolved Wins Below<span class="help tip-left" data-tip="At base list prices (no volume discount), the containment rate where the two models cost the same. Below this, Resolved is cheaper for the customer; above it, Per-Conversation is cheaper.">?</span></div>
             <div class="value" id="baseBreakLabel">60.0%</div>
           </div>
         </div>
@@ -812,7 +881,7 @@
               <div class="value" id="savingsPct">0%</div>
             </div>
             <div class="summary-card">
-              <div class="label">Break-Even @ Volume</div>
+              <div class="label">Resolved Wins Below<span class="help" data-tip="Containment rate where the two models cost the same at this volume. Below this rate, Resolved (outcome-based) is cheaper for the customer. Above it, Per-Conversation is cheaper. Factors in transfer pricing and abandon rate when enabled.">?</span></div>
               <div class="value" id="breakEvenVolumeLabel">0%</div>
             </div>
           </div>
@@ -886,7 +955,7 @@
               <th>Volume Band</th>
               <th>Resolved Price</th>
               <th>Per-Conv Price</th>
-              <th>Break-Even</th>
+              <th>Resolved Wins Below<span class="help tip-left" data-tip="The containment rate at which the two models cost the same. Below this rate, Resolved (outcome-based) is cheaper for the customer. Above it, Per-Conversation is cheaper. Updates live with transfer pricing and abandon rate when enabled.">?</span></th>
               <th>Discount</th>
             </tr>
           </thead>
